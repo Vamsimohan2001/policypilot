@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Policy Bot: FastAPI backend",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Policy Bot: Streamlit UI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": ["run", "streamlit_app.py", "--server.port", "8501"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Policy Bot: pytest",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests", "-q"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Policy Bot: backend + UI",
+      "configurations": ["Policy Bot: FastAPI backend", "Policy Bot: Streamlit UI"],
+      "stopAll": true
+    }
+  ]
+}

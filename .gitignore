@@ -1,0 +1,19 @@
+# environments
+.venv/
+venv/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# app runtime data (sqlite db, chroma index, logs)
+data/
+*.log
+
+# secrets / local config
+.env
+
+# os
+.DS_Store
+Thumbs.db
