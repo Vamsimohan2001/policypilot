@@ -22,6 +22,41 @@ API_BASE = os.environ.get("POLICYBOT_API_URL", "http://127.0.0.1:8000")
 st.set_page_config(page_title="Policy Bot", page_icon=":material/policy:", layout="centered")
 
 
+# --------------------------------------------------------------------- deployment secrets
+DEPLOYMENT_ENV_VARS = (
+    "JWT_SECRET",
+    "ACCESS_TOKEN_EXPIRE_MINUTES",
+    "LOGIN_MAX_ATTEMPTS",
+    "LOGIN_LOCKOUT_MINUTES",
+    "RATE_LIMIT_LOGIN_PER_MINUTE",
+    "RATE_LIMIT_CHAT_PER_MINUTE",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "OPENAI_EMBEDDING_MODEL",
+    "EMBEDDING_BACKEND",
+    "LLM_ENABLED",
+    "RAG_TOP_K",
+    "RAG_MAX_DISTANCE",
+    "SEED_ON_STARTUP",
+    "AUTO_INGEST_ON_STARTUP",
+)
+
+
+def apply_streamlit_secrets() -> None:
+    """Copy Streamlit Cloud secrets into environment variables for the FastAPI process."""
+    try:
+        secrets = st.secrets
+    except Exception:
+        return
+    for key in DEPLOYMENT_ENV_VARS:
+        if key in secrets:
+            os.environ[key] = str(secrets[key])
+
+
+apply_streamlit_secrets()
+
+
 # --------------------------------------------------------------------- backend management
 def _health(timeout: float = 1.5) -> dict | None:
     try:

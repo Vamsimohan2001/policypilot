@@ -103,6 +103,20 @@ FastAPI's interactive API documentation is available at <http://127.0.0.1:8000/d
 
 VS Code users can open Run and Debug and start **Policy Bot: backend + UI**.
 
+### Deploying with Streamlit Community Cloud
+
+The repository includes a Python 3.11 runtime setting and a Streamlit headless configuration. The app can start its FastAPI backend inside the same Streamlit container.
+
+1. Push the repository to GitHub.
+2. Sign in to [Streamlit Community Cloud](https://share.streamlit.io/) with GitHub.
+3. Choose **Create app**, select this repository and branch, and use `streamlit_app.py` as the entrypoint.
+4. In the app's advanced settings, copy the values from `.streamlit/secrets.toml.example` into the Secrets box.
+5. Replace the example JWT secret and OpenAI-compatible API key with private values, then deploy.
+
+Do not paste real secrets into GitHub or commit `.streamlit/secrets.toml`. The app reads deployment settings from Streamlit secrets and passes them to the FastAPI process.
+
+Community Cloud storage is ephemeral. Account records and the ChromaDB index can be recreated after a reboot or redeploy, so this setup is suitable for a demo rather than durable production data.
+
 ### 3. Try it
 
 Create an account from the Sign up tab, or use one of the demo accounts:
