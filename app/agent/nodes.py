@@ -12,7 +12,7 @@ from ..security import ROLE_ADMIN, ROLE_HR
 from . import prompts
 from .llm import chat as llm_chat
 from .llm import llm_active
-from .retriever import search_policies
+from .retriever import search_all_policies, search_policies
 
 log = logging.getLogger(__name__)
 
@@ -122,9 +122,21 @@ def policy_search_node(state: dict) -> dict:
     started = time.perf_counter()
     settings = get_settings()
     results = search_policies(state["question"], state["role"], k=settings.rag_top_k)
+    use_vector_cutoff = (
+        settings.embedding_backend.lower().strip() == "openai"
+        or (
+            settings.embedding_backend.lower().strip() == "auto"
+            and bool(settings.openai_api_key.strip())
+        )
+    )
     relevant = [
         r for r in results
-        if r.get("distance") is None or r["distance"] <= settings.rag_max_distance
+        if r.get("lexical_score", 0) >= 1
+        or (
+            use_vector_cutoff
+            and r.get("distance") is not None
+            and r["distance"] <= settings.rag_max_distance
+        )
     ]
     doc_ids = sorted({r["doc_id"] for r in relevant})
     detail = (
@@ -137,37 +149,82 @@ def policy_search_node(state: dict) -> dict:
     entry = {"step": len(state.get("trace") or []) + 1, "node": "policy_search", "status": "ok" if relevant else "no_match", "detail": detail, "ms": int((time.perf_counter() - started) * 1000)}
 
     out: dict = {"retrieved": relevant, "trace": [entry]}
+
+    restricted_matches = search_all_policies(state["question"], k=6)
+    restricted_matches = [
+        r for r in restricted_matches
+        if state["role"] not in r["roles"]
+        and r.get("lexical_score", 0) >= 2
+    ]
+    allowed_score = max(
+        (r.get("lexical_score", 0) for r in relevant),
+        default=0,
+    )
+    restricted_score = max(
+        (r.get("lexical_score", 0) for r in restricted_matches),
+        default=0,
+    )
+    restricted_ids = sorted({r["doc_id"] for r in restricted_matches if r.get("lexical_score", 0) >= restricted_score})
+
+    if restricted_ids and restricted_score > allowed_score and restricted_score >= 2:
+        out["retrieved"] = []
+        out["route"] = "restricted"
+        out["restricted_doc_ids"] = restricted_ids
+        entry["status"] = "restricted"
+        entry["detail"] = (
+            f"topic matches restricted policy document(s): {', '.join(restricted_ids)} "
+            f"(not available to role {state['role']})"
+        )
+        return out
+
     if not relevant:
-        out["route"] = "out_of_scope"
+        if restricted_ids:
+            out["route"] = "restricted"
+            out["restricted_doc_ids"] = restricted_ids
+        else:
+            out["route"] = "out_of_scope"
     return out
 
 
 # --------------------------------------------------------------------- answer
 def _extractive_answer(question: str, sources: list[dict]) -> str | None:
-    """Offline mode: pick the sentences with the highest keyword overlap with the question."""
+    """Offline mode: pick the strongest policy sentences for the question."""
+    lexical_sources = [
+        source for source in sources
+        if source.get("lexical_score", 0) >= 1
+    ]
+    if lexical_sources:
+        lexical_sources.sort(
+            key=lambda source: source.get("lexical_score", 0),
+            reverse=True,
+        )
+        sources = lexical_sources[:2]
+
     stopwords = {"the", "a", "an", "is", "are", "do", "does", "how", "what", "when", "who", "where", "why", "i", "my", "me", "we", "our", "you", "your", "and", "or", "of", "to", "in", "on", "for", "with", "about", "can", "many", "much", "m", "am", "be", "it", "this", "that", "there", "if", "at", "as", "by"}
 
     def keywords(text: str) -> set[str]:
         return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 2 and t not in stopwords}
 
     qkw = keywords(question)
+    normalized_question = " ".join(re.findall(r"[a-z0-9]+", question.lower()))
     scored: list[tuple[int, int, str]] = []
     for si, src in enumerate(sources):
-        for sentence in re.split(r"\n+|(?<=[.!?])\s+", src["text"]):
-            sentence = sentence.strip().lstrip("-*#").strip()
-            if len(sentence) < 40:
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", src["text"])
+        for sentence in re.split(r"\n+|(?<=[.!?])\s+", text):
+            sentence = re.sub(r"\s+", " ", sentence).strip().lstrip("-*#").strip()
+            if len(sentence) < 20:
                 continue
             overlap = len(qkw & keywords(sentence))
-            scored.append((overlap, si, sentence))
+            normalized_sentence = " ".join(re.findall(r"[a-z0-9]+", sentence.lower()))
+            phrase_bonus = 4 if normalized_question and normalized_question in normalized_sentence else 0
+            scored.append((overlap + phrase_bonus, si, sentence))
     scored.sort(key=lambda item: (-item[0], item[1]))
-    if not scored or scored[0][0] == 0:
+    if not scored:
         return None
 
     picked: list[tuple[int, str]] = []
     seen: set[str] = set()
     for overlap, si, sentence in scored:
-        if overlap == 0:
-            break
         signature = sentence[:64]
         if signature in seen:
             continue
@@ -201,6 +258,17 @@ def _smalltalk_answer(state: dict) -> str:
 def _out_of_scope_answer(state: dict) -> str:
     if PERSONAL_DATA_RE.search(state["question"]):
         return prompts.PERSONAL_DATA_ANSWER
+    if state.get("route") == "restricted":
+        ids = ", ".join(state.get("restricted_doc_ids") or [])
+        if ids:
+            return (
+                "I found this topic in the policy library, but it is covered by restricted "
+                f"policy {ids}, which is not available to your {state['role']} role."
+            )
+        return (
+            "I found this topic in the policy library, but it is covered by a restricted policy "
+            f"that is not available to your {state['role']} role."
+        )
     return prompts.OUT_OF_SCOPE_ANSWER
 
 
@@ -214,12 +282,24 @@ def answer_node(state: dict) -> dict:
         entry = {"step": len(state.get("trace") or []) + 1, "node": "answer", "status": "ok", "detail": "smalltalk reply", "ms": ms()}
         return {"answer": answer, "trace": [entry]}
 
-    if route == "out_of_scope":
+    if route in {"out_of_scope", "restricted"}:
         answer = _out_of_scope_answer(state)
         entry = {"step": len(state.get("trace") or []) + 1, "node": "answer", "status": "out_of_scope", "detail": "question outside the policy knowledge base", "ms": ms()}
         return {"answer": answer, "trace": [entry]}
 
     sources = state.get("retrieved") or []
+    if not llm_active():
+        sources = sorted(
+            sources,
+            key=lambda source: (
+                source.get("lexical_score", 0),
+                -(source.get("distance") if source.get("distance") is not None else 999),
+            ),
+            reverse=True,
+        )
+        lexical_sources = [source for source in sources if source.get("lexical_score", 0) >= 1]
+        if lexical_sources:
+            sources = lexical_sources[:6]
     attempts = state.get("attempts", 0) + 1
     if not sources:
         entry = {"step": len(state.get("trace") or []) + 1, "node": "answer", "status": "no_sources", "detail": "no relevant chunks after the role filter and relevance cutoff", "ms": ms()}
@@ -247,7 +327,7 @@ def answer_node(state: dict) -> dict:
         return {"answer": prompts.OUT_OF_SCOPE_ANSWER, "attempts": attempts, "trace": [entry]}
 
     entry = {"step": len(state.get("trace") or []) + 1, "node": "answer", "status": "ok", "detail": f"{mode}, {len(sources)} source chunk(s)", "ms": ms()}
-    return {"answer": answer, "attempts": attempts, "evidence_retry": False, "trace": [entry]}
+    return {"answer": answer, "retrieved": sources, "attempts": attempts, "evidence_retry": False, "trace": [entry]}
 
 
 # --------------------------------------------------------------------- citation check

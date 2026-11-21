@@ -16,7 +16,7 @@ class AgentState(TypedDict, total=False):
     guard_reason: str
 
     # routing
-    route: str  # policy | smalltalk | out_of_scope | blocked
+    route: str  # policy | smalltalk | out_of_scope | restricted | blocked
 
     # tool output
     retrieved: list[dict]
